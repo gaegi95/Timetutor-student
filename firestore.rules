@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['displayName', 'role', 'status']) &&
+             data.displayName is string &&
+             data.role in ['student', 'teacher', 'admin'] &&
+             data.status in ['none', 'pending', 'approved'];
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ((request.auth.token.email == "rlawhdgks9@gmail.com" && request.auth.token.email_verified == true) ||
+         (request.auth.token.email == "aks633035@gmail.com" && request.auth.token.email_verified == true) ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'));
+    }
+
+    function isApprovedStudent(classCode) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedClass == classCode && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'approved';
+    }
+
+    // ===============================================================
+    // User Rules
+    // ===============================================================
+    match /users/{userId} {
+      // 본인 데이터는 항상 읽고 쓸 수 있도록 허용하되, 데이터 유효성 검사 포함
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == userId && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin()) && isValidUser(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // ===============================================================
+    // Class Rules
+    // ===============================================================
+    match /classes/{classCode} {
+      allow read: if isAuthenticated(); // Students need to read class info to check approval/status
+      allow write: if isAdmin();
+    }
+
+    // ===============================================================
+    // Message Rules
+    // ===============================================================
+    match /messages/{messageId} {
+      allow read: if isAuthenticated() && isApprovedStudent(resource.data.classCode);
+      allow create: if isAuthenticated() && 
+        isApprovedStudent(request.resource.data.classCode) && 
+        get(/databases/$(database)/documents/classes/$(request.resource.data.classCode)).data.isChatLocked == false;
+    }
+  }
+}
